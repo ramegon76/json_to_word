@@ -14,7 +14,7 @@ import json
 import sys
 import re
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
@@ -43,7 +43,7 @@ def set_table_width(table, width_dxa=9360):
     tblW.set(qn('w:type'), 'dxa')
 
 
-def write_cell(cell, text, bold=False, header=False, size=10):
+def write_cell(cell, text, bold=False, header=False, size=12):
     cell.text = ''
     p = cell.paragraphs[0]
     p.paragraph_format.space_before = Pt(0)
@@ -88,7 +88,7 @@ def write_cell(cell, text, bold=False, header=False, size=10):
 
 # ─── Helpers de párrafo ───────────────────────────────────────────────────────
 
-def add_para(doc, text='', bold=False, color=None, size=11,
+def add_para(doc, text='', bold=False, color=None, size=12,
              before=3, after=3, keep=False):
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(before)
@@ -120,13 +120,13 @@ def add_spacer(doc, n=1):
 
 def add_chapter(doc, text):
     """Capítulo: Metadatos referenciales / estructurales / descriptivos"""
-    p = add_para(doc, text, bold=False, color=AZUL, size=16, before=14, after=6)
+    p = add_para(doc, text, bold=False, color=AZUL, size=12, before=14, after=6)
     return p
 
 
 def add_section(doc, text):
     """Sección: Identificación / Proceso de Producción / etc."""
-    p = add_para(doc, text, bold=False, color=AZUL, size=13, before=10, after=4)
+    p = add_para(doc, text, bold=False, color=AZUL, size=12, before=10, after=4)
     return p
 
 
@@ -138,13 +138,13 @@ def add_subsection(doc, text):
 
 def add_label(doc, text):
     """Etiqueta de campo: negrita azul 11pt"""
-    p = add_para(doc, text, bold=True, color=AZUL, size=11, before=6, after=2, keep=True)
+    p = add_para(doc, text, bold=True, color=AZUL, size=12, before=6, after=2, keep=True)
     return p
 
 
 def add_value(doc, text):
     """Valor de campo: gris normal 11pt"""
-    p = add_para(doc, text, color=GRIS, size=11, before=0, after=4)
+    p = add_para(doc, text, color=GRIS, size=12, before=0, after=4)
     return p
 
 
@@ -181,13 +181,85 @@ def add_single_col_table(doc, values, after_spacer=True):
         add_para(doc, '', before=0, after=2)
 
 
+def add_fixed_2col_table(doc, headers, rows, col1_cm=8):
+    """Tabla de 2 columnas con ancho fijo en col1 y resto para col2.
+    Usa layout fijo para que URLs largas no expandan la columna."""
+    if not rows:
+        return
+    # En landscape con márgenes 1.27cm: 11" = 15840 DXA - 2×(1.27cm×567) = 14400 DXA útiles
+    total_dxa = 14400
+    col1_dxa = int(col1_cm * 567)
+    col2_dxa = total_dxa - col1_dxa
+    widths = [col1_dxa, col2_dxa]
+
+    table = doc.add_table(rows=1 + len(rows), cols=2)
+    table.style = 'Table Grid'
+    set_table_width(table, total_dxa)
+
+    # Layout fijo para respetar anchos sin importar el contenido
+    tbl = table._tbl
+    tblPr = tbl.find(qn('w:tblPr'))
+    tblLayout = tblPr.find(qn('w:tblLayout')) if tblPr is not None else None
+    if tblLayout is None and tblPr is not None:
+        tblLayout = OxmlElement('w:tblLayout')
+        tblPr.append(tblLayout)
+    if tblLayout is not None:
+        tblLayout.set(qn('w:type'), 'fixed')
+
+    # Grid
+    tblGrid = tbl.find(qn('w:tblGrid'))
+    if tblGrid is None:
+        tblGrid = OxmlElement('w:tblGrid')
+        tbl.insert(1, tblGrid)
+    else:
+        for gc in list(tblGrid):
+            tblGrid.remove(gc)
+    for w in widths:
+        gc = OxmlElement('w:gridCol')
+        gc.set(qn('w:w'), str(w))
+        tblGrid.append(gc)
+
+    def set_col_width(cell, w):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcW = tcPr.find(qn('w:tcW'))
+        if tcW is None:
+            tcW = OxmlElement('w:tcW')
+            tcPr.insert(0, tcW)
+        tcW.set(qn('w:w'), str(w))
+        tcW.set(qn('w:type'), 'dxa')
+
+    for j, h in enumerate(headers):
+        cell = table.rows[0].cells[j]
+        set_col_width(cell, widths[j])
+        write_cell(cell, h, header=True)
+    for i, row in enumerate(rows):
+        for j, val in enumerate(row):
+            cell = table.rows[i + 1].cells[j]
+            set_col_width(cell, widths[j])
+            write_cell(cell, val or '')
+
+    add_para(doc, '', before=0, after=2)
+
+
+def render_list_or_text(doc, values):
+    """Si hay más de un ítem → tabla de una columna. Si hay uno → texto plano."""
+    values = [v for v in values if v and str(v).strip()]
+    if not values:
+        return
+    if len(values) > 1:
+        add_single_col_table(doc, values)
+    else:
+        add_value(doc, values[0])
+
+
 # ─── Limpieza de valores ──────────────────────────────────────────────────────
 
 def clean_cat(val):
-    """Elimina prefijo numérico: '08 / Anual' → 'Anual'"""
+    """Elimina prefijo de catálogo: '08 / Anual' o 'M_06 / Encuesta' → 'Anual' / 'Encuesta'"""
     if not val:
         return ''
-    return re.sub(r'^\d+\s*/\s*', '', str(val)).strip()
+    return re.sub(r'^[\w_]+\s*/\s*', '', str(val)).strip()
 
 
 def remove_acronym(val):
@@ -201,6 +273,17 @@ def bool_str(val):
     return 'Sí' if str(val) in ('1', 'True', 'true') else 'No'
 
 
+def fix_date(val):
+    """Convierte YYYY-MM-DD → DD/MM/AAAA en cualquier string que contenga ese patrón."""
+    if not val:
+        return val
+    return re.sub(
+        r'(\d{4})-(\d{2})-(\d{2})',
+        lambda m: f'{m.group(3)}/{m.group(2)}/{m.group(1)}',
+        str(val)
+    )
+
+
 def fmt(elem, val):
     if val is None:
         return ''
@@ -209,7 +292,8 @@ def fmt(elem, val):
         return clean_cat(val)
     if tipo == 'BO':
         return bool_str(val)
-    return str(val).strip()
+    # Convertir fechas en formato anglosajón al formato DD/MM/AAAA
+    return fix_date(str(val).strip())
 
 
 # ─── Extracción de datos ──────────────────────────────────────────────────────
@@ -293,21 +377,30 @@ def build_document(data):
 
     # Configurar página carta con márgenes 0.75"
     sec = doc.sections[0]
-    sec.page_width  = Inches(8.5)
-    sec.page_height = Inches(11)
+    # Horizontal (landscape): ancho y alto se intercambian
+    sec.page_width  = Inches(11)
+    sec.page_height = Inches(8.5)
     for attr in ('top_margin', 'bottom_margin', 'left_margin', 'right_margin'):
-        setattr(sec, attr, Inches(0.75))
+        setattr(sec, attr, Cm(1.27))
+    # Indicar orientación landscape en el XML de la sección
+    from docx.oxml import OxmlElement as _OxmlElement
+    from docx.oxml.ns import qn as _qn
+    pgSz = sec._sectPr.find(_qn('w:pgSz'))
+    if pgSz is None:
+        pgSz = _OxmlElement('w:pgSz')
+        sec._sectPr.append(pgSz)
+    pgSz.set(_qn('w:orient'), 'landscape')
 
     # ── ENCABEZADO ──────────────────────────────────────────────────────────
     nombre       = data.get('nombreInstancia', '')
     complemento  = data.get('complementoNombre', '')
     nombre_corto = data.get('nombreCortoInstancia', '')
 
-    add_para(doc, nombre, bold=True, color=AZUL, size=16, before=0, after=4)
+    add_para(doc, nombre, bold=True, color=AZUL, size=12, before=0, after=4)
     if complemento:
-        add_para(doc, complemento, bold=True, color=AZUL, size=13, before=0, after=4)
-    add_para(doc, nombre_corto, bold=True, color=AZUL, size=11, before=0, after=0)
-    add_spacer(doc, 2)
+        add_para(doc, complemento, bold=True, color=AZUL, size=12, before=0, after=4)
+    add_para(doc, nombre_corto, bold=True, color=AZUL, size=12, before=0, after=0)
+    add_spacer(doc, 1)
 
     # ── METADATOS REFERENCIALES ──────────────────────────────────────────────
     sec_ref = find_top_sec(data, 'referenciales')
@@ -321,7 +414,7 @@ def build_document(data):
             add_section(doc, 'Identificación del documento de metadatos')
             sec_creacion = find_subsec(sec_id, 'creación')
             if sec_creacion:
-                add_subsection(doc, 'Creación o actualización del documento')
+                add_subsection(doc, 'Creación o actualización del documento de metadatos')
 
                 # Productor del metadato → tabla Nombre | Siglas | Dependencia
                 e = find_elem(sec_creacion, 'Productor del metadato')
@@ -333,7 +426,7 @@ def build_document(data):
                 # Fecha de actualización
                 e = find_elem(sec_creacion, 'Fecha de actualización')
                 if e and has_content(e):
-                    add_label(doc, 'Fecha de actualización')
+                    add_label(doc, 'Fecha de actualización del metadato')
                     add_value(doc, get_single(e))
 
                 # Actualización de los metadatos
@@ -342,7 +435,7 @@ def build_document(data):
                     add_label(doc, 'Actualización de los metadatos')
                     add_value(doc, get_single(e))
 
-        add_spacer(doc, 2)
+        add_spacer(doc, 1)
 
         # — Proceso de Producción documentado —
         sec_pp = find_subsec(sec_ref, 'producción documentado')
@@ -368,11 +461,7 @@ def build_document(data):
                 e = find_elem(sec_datos, 'Programa de Información')
                 if e and has_content(e):
                     add_label(doc, 'Programa de Información')
-                    vals = [clean_cat(v) for v in get_values(e)]
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
                 # Ciclo de proceso
                 e = find_elem(sec_datos, 'Ciclo de proceso')
@@ -386,7 +475,7 @@ def build_document(data):
                     add_label(doc, 'Subtítulo del documento de metadatos')
                     add_value(doc, get_single(e))
 
-        add_spacer(doc, 2)
+        add_spacer(doc, 1)
 
         # — Características del Proceso de Producción —
         sec_car = find_subsec(sec_ref, 'características')
@@ -441,11 +530,7 @@ def build_document(data):
                 e = find_elem(sec_desc, 'Periodicidad')
                 if e and has_content(e):
                     add_label(doc, 'Periodicidad de producción')
-                    vals = [clean_cat(v) for v in get_values(e)]
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
                 e = find_elem(sec_desc, 'Grado de madurez')
                 if e and has_content(e):
@@ -487,56 +572,27 @@ def build_document(data):
                 e = find_elem(sec_dc, 'Indicadores objetivo')
                 if e and has_content(e):
                     add_label(doc, 'Indicadores objetivo')
-                    vals = get_values(e)
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    elif vals:
-                        # Si el valor único contiene saltos de línea → lista
-                        items = [x.strip() for x in vals[0].split('\n') if x.strip()]
-                        if len(items) > 1:
-                            add_single_col_table(doc, items)
-                        else:
-                            add_value(doc, vals[0])
+                    render_list_or_text(doc, get_values(e))
 
                 e = find_elem(sec_dc, 'Dominios de estudio')
                 if e and has_content(e):
                     add_label(doc, 'Dominios de estudio')
-                    vals = get_values(e)
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        items = [x.strip() for x in vals[0].split('\n') if x.strip()] if vals else []
-                        if len(items) > 1:
-                            add_single_col_table(doc, items)
-                        else:
-                            add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, get_values(e))
 
                 e = find_elem(sec_dc, 'Cobertura temática')
                 if e and has_content(e):
                     add_label(doc, 'Cobertura temática')
-                    vals = [v.strip() for v in get_values(e) if v.strip()]
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, get_values(e))
 
                 e = find_elem(sec_dc, 'Representación espacial')
                 if e and has_content(e):
                     add_label(doc, 'Representación espacial')
-                    vals = [clean_cat(v) for v in get_values(e)]
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
                 e = find_elem(sec_dc, 'Estándares y clasificaciones')
                 if e and has_content(e):
                     add_label(doc, 'Estándares y clasificaciones')
-                    vals = get_values(e)
-                    if len(vals) > 1:
-                        add_single_col_table(doc, vals)
-                    else:
-                        add_value(doc, vals[0] if vals else '')
+                    render_list_or_text(doc, get_values(e))
 
                 e = find_elem(sec_dc, 'Cobertura geográfica')
                 if e and has_content(e):
@@ -581,21 +637,13 @@ def build_document(data):
 
                     e = find_elem(sec_cap, 'Modalidad de captación')
                     if e and has_content(e):
-                        add_label(doc, 'Modalidad de captación')
-                        vals = [clean_cat(v) for v in get_values(e)]
-                        if len(vals) > 1:
-                            add_single_col_table(doc, vals)
-                        else:
-                            add_value(doc, vals[0] if vals else '')
+                        add_label(doc, 'Modalidad de captación o recolección de los datos')
+                        render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
                     e = find_elem(sec_cap, 'Responsable de la captación')
                     if e and has_content(e):
-                        add_label(doc, 'Responsable de la captación')
-                        vals = get_values(e)
-                        if len(vals) > 1:
-                            add_single_col_table(doc, vals)
-                        else:
-                            add_value(doc, vals[0] if vals else '')
+                        add_label(doc, 'Responsable de la captación de los datos')
+                        render_list_or_text(doc, get_values(e))
 
                     e = find_elem(sec_cap, 'Descripción del instrumento')
                     if e and has_content(e):
@@ -685,12 +733,7 @@ def build_document(data):
                     e = find_elem(sec_cal, 'Evaluaciones implementadas')
                     if e and has_content(e):
                         add_label(doc, 'Evaluaciones implementadas')
-                        vals = get_values(e)
-                        items = [x.strip() for x in vals[0].split('\n') if x.strip()] if vals else []
-                        if len(items) > 1:
-                            add_single_col_table(doc, items)
-                        else:
-                            add_value(doc, vals[0] if vals else '')
+                        render_list_or_text(doc, get_values(e))
 
                     # Pertinencia → tabla Fuente | Referencia
                     e = find_elem(sec_cal, 'Pertinencia')
@@ -704,7 +747,7 @@ def build_document(data):
                     if e and has_content(e):
                         add_label(doc, 'Accesibilidad: Interpretación de la información')
                         _, hdrs, rows = get_compound_rows(e)
-                        add_table(doc, hdrs, rows)
+                        add_fixed_2col_table(doc, hdrs, rows, col1_cm=8)
 
                     e = find_elem(sec_cal, 'Puntualidad: Incorporación')
                     if e and has_content(e):
@@ -738,9 +781,9 @@ def build_document(data):
                     if e and has_content(e):
                         add_label(doc, 'Veracidad: Indicadores de precisión y confiabilidad estadística y exactitud geográfica')
                         _, hdrs, rows = get_compound_rows(e)
-                        add_table(doc, hdrs, rows)
+                        add_fixed_2col_table(doc, hdrs, rows, col1_cm=8)
 
-    add_spacer(doc, 2)
+    add_spacer(doc, 1)
 
     # ── METADATOS ESTRUCTURALES ──────────────────────────────────────────────
     sec_est = find_top_sec(data, 'estructurales')
@@ -748,102 +791,114 @@ def build_document(data):
         e_bds = find_elem(sec_est, 'Descripción del archivo')
         if e_bds and has_content(e_bds):
             add_chapter(doc, 'Metadatos estructurales')
+            add_section(doc, 'Descripción del archivo de base de datos')
 
-            # Los sub-campos del elemento "Descripción del archivo de base de datos"
-            # tienen una estructura especial: hay un subfield "Archivo de base de datos"
-            # que agrupa los demás. Necesitamos identificar cada base de datos.
             subfields = e_bds.get('elemento', [])
-            # Encontrar el subfield que actúa como agrupador de BDs
-            sf_archivo = next((sf for sf in subfields if 'Archivo de base de datos' == sf['nombre'].strip()), None)
 
-            if sf_archivo:
-                # Cada padre en sf_archivo.contenido es una BD diferente
-                parent_entries = sorted(
-                    [c for c in sf_archivo.get('contenido', []) if c.get('idPadreContenido') is None],
-                    key=lambda c: c.get('orden', 0)
-                )
-                # Para cada BD
-                for pe in parent_entries:
-                    pid_bd = pe['idContenido']
-                    # Obtener el ID hijo (el contenido del sf_archivo que tiene este padre)
-                    child_of_archivo = next((c for c in sf_archivo.get('contenido', [])
-                                             if c.get('idPadreContenido') == pid_bd), None)
-                    if not child_of_archivo:
-                        continue
-                    pid_vars = child_of_archivo['idContenido']
+            # El subfield "Archivo de base de datos" tiene un contenido por BD
+            # con idPadreContenido apuntando al grupo raíz de cada BD.
+            # Los IDs raíz (sin padre) son los grupos de cada base de datos.
+            # Obtenemos los pid_bd como los idPadreContenido únicos que apuntan
+            # a contenidos con idPadreContenido=None en el elemento principal.
+            raiz_ids = sorted(
+                [c['idContenido'] for c in e_bds.get('contenido', [])
+                 if c.get('idPadreContenido') is None],
+                key=lambda x: x
+            )
 
-                    def get_sf_val(nombre_sf):
-                        sf = next((s for s in subfields if nombre_sf.lower() in s['nombre'].strip().lower()), None)
-                        if not sf:
-                            return ''
-                        match = next((c for c in sf.get('contenido', []) if c.get('idPadreContenido') == pid_bd), None)
-                        if match and match.get('valor') is not None:
-                            return fmt(sf, match['valor'])
+            for pid_bd in raiz_ids:
+                def get_sf_val(nombre_sf, pid=pid_bd):
+                    sf = next((s for s in subfields
+                                if nombre_sf.lower() in s['nombre'].strip().lower()), None)
+                    if not sf:
                         return ''
+                    match = next((c for c in sf.get('contenido', [])
+                                  if c.get('idPadreContenido') == pid), None)
+                    if match and match.get('valor') is not None and str(match['valor']).strip():
+                        return fmt(sf, match['valor'])
+                    return ''
 
-                    add_subsection(doc, 'Descripción del archivo de base de datos')
+                def get_sf_vals(nombre_sf, pid=pid_bd):
+                    """Para campos multi-valor como Fuente de información."""
+                    sf = next((s for s in subfields
+                                if nombre_sf.lower() in s['nombre'].strip().lower()), None)
+                    if not sf:
+                        return []
+                    return [
+                        fmt(sf, c['valor'])
+                        for c in sorted(sf.get('contenido', []), key=lambda x: x.get('orden', 0))
+                        if c.get('idPadreContenido') == pid
+                        and c.get('valor') is not None
+                        and str(c['valor']).strip()
+                    ]
 
-                    v = get_sf_val('Nombre del archivo')
-                    if v:
-                        add_label(doc, 'Nombre del archivo de base de datos')
-                        add_value(doc, v)
+                # Verificar que la BD tiene al menos un campo con contenido
+                nombre_bd = get_sf_val('Nombre del archivo')
+                if not nombre_bd:
+                    continue
 
-                    v = get_sf_val('Unidad y Área Administrativa')
-                    if v:
-                        add_label(doc, 'Unidad y Área Administrativa responsable')
-                        add_value(doc, v)
+                add_label(doc, 'Nombre del archivo de base de datos')
+                add_value(doc, nombre_bd)
 
-                    v = get_sf_val('Sitio de descarga')
-                    if v:
-                        add_label(doc, 'Sitio de descarga de la base de datos')
-                        add_value(doc, v)
+                v = get_sf_val('Unidad y Área Administrativa')
+                if v:
+                    add_label(doc, 'Unidad y Área Administrativa responsable')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Contenido de la base de datos')
-                    if v:
-                        add_label(doc, 'Contenido de la base de datos')
-                        add_value(doc, v)
+                v = get_sf_val('Sitio de descarga')
+                if v:
+                    add_label(doc, 'Sitio de descarga de la base de datos')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Cobertura temporal')
-                    if v:
-                        add_label(doc, 'Cobertura temporal')
-                        add_value(doc, v)
+                v = get_sf_val('Contenido de la base de datos')
+                if v:
+                    add_label(doc, 'Contenido de la base de datos')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Última fecha de publicación')
-                    if v:
-                        add_label(doc, 'Última fecha de publicación')
-                        add_value(doc, v)
+                v = get_sf_val('Cobertura temporal')
+                if v:
+                    add_label(doc, 'Cobertura temporal')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Versión de la base de datos')
-                    if v:
-                        add_label(doc, 'Versión de la base de datos')
-                        add_value(doc, v)
+                v = get_sf_val('Última fecha de publicación')
+                if v:
+                    add_label(doc, 'Última fecha de publicación')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Formato de la base de datos')
-                    if v:
-                        add_label(doc, 'Formato de la base de datos')
-                        add_value(doc, clean_cat(v))
+                v = get_sf_val('Versión de la base de datos')
+                if v:
+                    add_label(doc, 'Versión de la base de datos')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Fuente de información')
-                    if v:
-                        add_label(doc, 'Fuente de información')
-                        add_value(doc, v)
+                v = get_sf_val('Formato de la base de datos')
+                if v:
+                    add_label(doc, 'Formato de la base de datos')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Derechos')
-                    if v:
-                        add_label(doc, 'Derechos')
-                        add_value(doc, v)
+                vals = get_sf_vals('Fuente de información')
+                if vals:
+                    add_label(doc, 'Fuente de información')
+                    if len(vals) > 1:
+                        add_single_col_table(doc, vals)
+                    else:
+                        add_value(doc, vals[0])
 
-                    v = get_sf_val('Relaciones')
-                    if v:
-                        add_label(doc, 'Relaciones')
-                        add_value(doc, v)
+                v = get_sf_val('Derechos')
+                if v:
+                    add_label(doc, 'Derechos')
+                    add_value(doc, v)
 
-                    v = get_sf_val('Notas o comentarios')
-                    if v:
-                        add_label(doc, 'Notas o comentarios sobre la base de datos')
-                        add_value(doc, v)
+                v = get_sf_val('Relaciones')
+                if v:
+                    add_label(doc, 'Relaciones')
+                    add_value(doc, v)
 
-    add_spacer(doc, 2)
+                v = get_sf_val('Notas o comentarios')
+                if v:
+                    add_label(doc, 'Notas o comentarios sobre la base de datos')
+                    add_value(doc, v)
+
+    add_spacer(doc, 1)
 
     # ── MATERIALES DE REFERENCIA EXTERNOS ────────────────────────────────────
     sec_mat = find_top_sec(data, 'materiales')
@@ -851,7 +906,7 @@ def build_document(data):
         e = find_elem(sec_mat, 'Descripción de los materiales')
         if e and has_content(e):
             add_chapter(doc, 'Materiales de Referencia Externos')
-            add_section(doc, 'Descripción de los materiales de soporte conceptual y metodológico')
+            add_section(doc, 'Descripción de los materiales de soporte conceptual y metodológico*')
 
             subfields = e.get('elemento', [])
             parent_entries = sorted(
@@ -881,7 +936,95 @@ def build_document(data):
                 if any(v for v in row):
                     rows.append(row)
 
-            add_table(doc, headers, rows)
+            # Tabla con ancho total fijo 24 cm, columnas distribuidas uniformemente
+            if rows:
+                n_cols = len(headers)
+                # 24 cm × 567 DXA/cm = 13,608 DXA total; cada columna = 2,268 DXA (~4 cm)
+                total_dxa = 13608
+                col_w = total_dxa // n_cols
+                widths = [col_w] * n_cols
+                widths[-1] = total_dxa - col_w * (n_cols - 1)
+
+                table = doc.add_table(rows=1 + len(rows), cols=n_cols)
+                table.style = 'Table Grid'
+                set_table_width(table, total_dxa)
+
+                # Desactivar autofit para que las columnas no se expandan por el contenido
+                tbl = table._tbl
+                tblPr = tbl.find(qn('w:tblPr'))
+                tblLayout = tblPr.find(qn('w:tblLayout')) if tblPr is not None else None
+                if tblLayout is None and tblPr is not None:
+                    tblLayout = OxmlElement('w:tblLayout')
+                    tblPr.append(tblLayout)
+                if tblLayout is not None:
+                    tblLayout.set(qn('w:type'), 'fixed')
+
+                # Definir grid de columnas uniformes
+                tblGrid = tbl.find(qn('w:tblGrid'))
+                if tblGrid is None:
+                    tblGrid = OxmlElement('w:tblGrid')
+                    tbl.insert(1, tblGrid)
+                else:
+                    for gc in list(tblGrid):
+                        tblGrid.remove(gc)
+                for w in widths:
+                    gc = OxmlElement('w:gridCol')
+                    gc.set(qn('w:w'), str(w))
+                    tblGrid.append(gc)
+
+                for j, h in enumerate(headers):
+                    cell = table.rows[0].cells[j]
+                    # Forzar ancho en cada celda
+                    tc = cell._tc
+                    tcPr = tc.get_or_add_tcPr()
+                    tcW = tcPr.find(qn('w:tcW'))
+                    if tcW is None:
+                        tcW = OxmlElement('w:tcW')
+                        tcPr.insert(0, tcW)
+                    tcW.set(qn('w:w'), str(widths[j]))
+                    tcW.set(qn('w:type'), 'dxa')
+                    write_cell(cell, h, header=True)
+
+                for i, row in enumerate(rows):
+                    for j, val in enumerate(row):
+                        cell = table.rows[i + 1].cells[j]
+                        tc = cell._tc
+                        tcPr = tc.get_or_add_tcPr()
+                        tcW = tcPr.find(qn('w:tcW'))
+                        if tcW is None:
+                            tcW = OxmlElement('w:tcW')
+                            tcPr.insert(0, tcW)
+                        tcW.set(qn('w:w'), str(widths[j]))
+                        tcW.set(qn('w:type'), 'dxa')
+                        write_cell(cell, val or '')
+
+                add_para(doc, '', before=0, after=4)
+
+            # ── Nota del área encargada ──
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = Pt(12)
+            r1 = p.add_run('*Nota del área encargada de la verificación de metadatos:')
+            r1.font.name = FUENTE
+            r1.font.size = Pt(12)
+            r1.font.bold = True
+            r1.font.color.rgb = GRIS
+            r2 = p.add_run(' se informa que los Materiales de Referencia Externos cuentan con elementos de metadatos adicionales (Formato, Idioma, Colaboradores, Temas, Fuente, Cobertura, Derechos, Colaboradores, Editor) que no fueron incorporados en el presente formato, con el fin de concentrar el análisis en los metadatos referenciales que presentaban mayores áreas de oportunidad.')
+            r2.font.name = FUENTE
+            r2.font.size = Pt(12)
+            r2.font.bold = False
+            r2.font.color.rgb = GRIS
+
+            p2 = doc.add_paragraph()
+            p2.paragraph_format.space_before = Pt(4)
+            p2.paragraph_format.space_after = Pt(0)
+            p2.paragraph_format.line_spacing = Pt(12)
+            r3 = p2.add_run('La totalidad de estos elementos se encuentra documentada en las fichas de metadatos (SIM) correspondientes a cada uno de los recursos incluidos en esta sección y podrá ser proporcionada de manera inmediata en caso de requerirse.')
+            r3.font.name = FUENTE
+            r3.font.size = Pt(12)
+            r3.font.bold = False
+            r3.font.color.rgb = GRIS
 
     return doc
 
