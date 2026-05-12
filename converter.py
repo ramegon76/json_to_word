@@ -1007,12 +1007,12 @@ def build_document(data):
             p.paragraph_format.line_spacing = Pt(12)
             r1 = p.add_run('*Nota del área encargada de la verificación de metadatos:')
             r1.font.name = FUENTE
-            r1.font.size = Pt(12)
+            r1.font.size = Pt(10)
             r1.font.bold = True
             r1.font.color.rgb = GRIS
             r2 = p.add_run(' se informa que los Materiales de Referencia Externos cuentan con elementos de metadatos adicionales (Formato, Idioma, Colaboradores, Temas, Fuente, Cobertura, Derechos, Colaboradores, Editor) que no fueron incorporados en el presente formato, con el fin de concentrar el análisis en los metadatos referenciales que presentaban mayores áreas de oportunidad.')
             r2.font.name = FUENTE
-            r2.font.size = Pt(12)
+            r2.font.size = Pt(10)
             r2.font.bold = False
             r2.font.color.rgb = GRIS
 
@@ -1022,7 +1022,7 @@ def build_document(data):
             p2.paragraph_format.line_spacing = Pt(12)
             r3 = p2.add_run('La totalidad de estos elementos se encuentra documentada en las fichas de metadatos (SIM) correspondientes a cada uno de los recursos incluidos en esta sección y podrá ser proporcionada de manera inmediata en caso de requerirse.')
             r3.font.name = FUENTE
-            r3.font.size = Pt(12)
+            r3.font.size = Pt(10)
             r3.font.bold = False
             r3.font.color.rgb = GRIS
 
