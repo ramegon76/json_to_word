@@ -29,41 +29,108 @@ FUENTE = "Arial"
 
 # ─── Helpers XML ─────────────────────────────────────────────────────────────
 
-def set_table_width(table, width_dxa=9360):
+def set_table_width(table, width_dxa=9360, equal_cols=True):
+    """
+    Configura el ancho total de la tabla.
+
+    equal_cols=True:
+        distribuye uniformemente todas las columnas.
+    """
+
     tbl = table._tbl
+
     tblPr = tbl.find(qn('w:tblPr'))
     if tblPr is None:
         tblPr = OxmlElement('w:tblPr')
         tbl.insert(0, tblPr)
+
+    # ancho total
     tblW = tblPr.find(qn('w:tblW'))
     if tblW is None:
         tblW = OxmlElement('w:tblW')
         tblPr.append(tblW)
+
     tblW.set(qn('w:w'), str(width_dxa))
     tblW.set(qn('w:type'), 'dxa')
+
+    # layout fijo
+    tblLayout = tblPr.find(qn('w:tblLayout'))
+    if tblLayout is None:
+        tblLayout = OxmlElement('w:tblLayout')
+        tblPr.append(tblLayout)
+
+    tblLayout.set(qn('w:type'), 'fixed')
+
+    if equal_cols:
+        n_cols = len(table.columns)
+
+        if n_cols > 0:
+            col_width = int(width_dxa / n_cols)
+
+            # grid de columnas
+            tblGrid = tbl.find(qn('w:tblGrid'))
+
+            if tblGrid is None:
+                tblGrid = OxmlElement('w:tblGrid')
+                tbl.insert(1, tblGrid)
+            else:
+                for gc in list(tblGrid):
+                    tblGrid.remove(gc)
+
+            for _ in range(n_cols):
+                gridCol = OxmlElement('w:gridCol')
+                gridCol.set(qn('w:w'), str(col_width))
+                tblGrid.append(gridCol)
+
+            # aplicar ancho a todas las celdas
+            for row in table.rows:
+                for cell in row.cells:
+                    tc = cell._tc
+                    tcPr = tc.get_or_add_tcPr()
+
+                    tcW = tcPr.find(qn('w:tcW'))
+
+                    if tcW is None:
+                        tcW = OxmlElement('w:tcW')
+                        tcPr.append(tcW)
+
+                    tcW.set(qn('w:w'), str(col_width))
+                    tcW.set(qn('w:type'), 'dxa')
 
 
 def write_cell(cell, text, bold=False, header=False, size=12):
     cell.text = ''
+
     p = cell.paragraphs[0]
+
+    # alineación horizontal izquierda
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
     p.paragraph_format.line_spacing = Pt(12)
+
     run = p.add_run(str(text or ''))
+
     run.font.name = FUENTE
     run.font.size = Pt(size)
     run.font.bold = bold or header
     run.font.color.rgb = AZUL if header else GRIS
-    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+    # alineación vertical superior
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
+
     for tag in ('w:tcBorders', 'w:tcMar', 'w:shd', 'w:vAlign'):
         el = tcPr.find(qn(tag))
         if el is not None:
             tcPr.remove(el)
 
+    # bordes
     tcBorders = OxmlElement('w:tcBorders')
+
     for side in ('top', 'left', 'bottom', 'right'):
         el = OxmlElement(f'w:{side}')
         el.set(qn('w:val'), 'single')
@@ -71,19 +138,30 @@ def write_cell(cell, text, bold=False, header=False, size=12):
         el.set(qn('w:space'), '0')
         el.set(qn('w:color'), BORDE)
         tcBorders.append(el)
+
     tcPr.append(tcBorders)
 
+    # márgenes internos
     tcMar = OxmlElement('w:tcMar')
-    for side, val in (('top', 80), ('start', 160), ('bottom', 80), ('end', 160)):
+
+    for side, val in (
+        ('top', 80),
+        ('start', 160),
+        ('bottom', 80),
+        ('end', 160)
+    ):
         el = OxmlElement(f'w:{side}')
         el.set(qn('w:w'), str(val))
         el.set(qn('w:type'), 'dxa')
         tcMar.append(el)
+
     tcPr.append(tcMar)
 
+    # alineación vertical superior
     vAlign = OxmlElement('w:vAlign')
-    vAlign.set(qn('w:val'), 'center')
+    vAlign.set(qn('w:val'), 'top')
     tcPr.append(vAlign)
+
 
 
 # ─── Helpers de párrafo ───────────────────────────────────────────────────────
@@ -138,7 +216,16 @@ def add_subsection(doc, text):
 
 def add_label(doc, text):
     """Etiqueta de campo: negrita azul 11pt"""
-    p = add_para(doc, text, bold=True, color=AZUL, size=12, before=6, after=2, keep=True)
+    p = add_para(
+        doc,
+        text,
+        bold=True,
+        color=AZUL,
+        size=12,
+        before=18,
+        after=2,
+        keep=True
+    )
     return p
 
 
@@ -243,14 +330,11 @@ def add_fixed_2col_table(doc, headers, rows, col1_cm=8):
 
 
 def render_list_or_text(doc, values):
-    """Si hay más de un ítem → tabla de una columna. Si hay uno → texto plano."""
+    """Siempre tabla de una columna, sin importar si es uno o varios ítems."""
     values = [v for v in values if v and str(v).strip()]
     if not values:
         return
-    if len(values) > 1:
-        add_single_col_table(doc, values)
-    else:
-        add_value(doc, values[0])
+    add_single_col_table(doc, values)
 
 
 # ─── Limpieza de valores ──────────────────────────────────────────────────────
@@ -529,7 +613,7 @@ def build_document(data):
 
                 e = find_elem(sec_desc, 'Periodicidad')
                 if e and has_content(e):
-                    add_label(doc, 'Periodicidad de producción')
+                    add_label(doc, 'Periodicidad de producción de la información')
                     render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
                 e = find_elem(sec_desc, 'Grado de madurez')
@@ -584,11 +668,6 @@ def build_document(data):
                     add_label(doc, 'Cobertura temática')
                     render_list_or_text(doc, get_values(e))
 
-                e = find_elem(sec_dc, 'Representación espacial')
-                if e and has_content(e):
-                    add_label(doc, 'Representación espacial')
-                    render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
-
                 e = find_elem(sec_dc, 'Estándares y clasificaciones')
                 if e and has_content(e):
                     add_label(doc, 'Estándares y clasificaciones')
@@ -598,6 +677,11 @@ def build_document(data):
                 if e and has_content(e):
                     add_label(doc, 'Cobertura geográfica')
                     add_value(doc, get_single(e))
+
+                e = find_elem(sec_dc, 'Representación espacial')
+                if e and has_content(e):
+                    add_label(doc, 'Representación espacial')
+                    render_list_or_text(doc, [clean_cat(v) for v in get_values(e)])
 
             # Diseño muestral
             sec_dm = find_subsec(sec_car, 'diseño muestral')
@@ -701,7 +785,7 @@ def build_document(data):
                     if e and has_content(e):
                         add_label(doc, 'Resultados disponibles')
                         _, hdrs, rows = get_compound_rows(e)
-                        add_table(doc, hdrs, rows)
+                        add_fixed_2col_table(doc, hdrs, rows, col1_cm=8)
 
                     e = find_elem(sec_dif, 'Estatus de la información')
                     if e and has_content(e):
